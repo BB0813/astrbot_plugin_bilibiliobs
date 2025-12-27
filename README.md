@@ -228,9 +228,9 @@ pip install aiohttp>=3.8.0
 ## 版本信息
 
 - **版本**: 1.0.0
-- **作者**: Binbim
+- **作者**: BB0813
 - **仓库**: https://github.com/Binbim/astrbot_plugin_BiliBiliOBS
-- **基于**: AstrBot插件框架
+- **基于**: AstrBot_plugin_helloword
 
 ## 支持
 
