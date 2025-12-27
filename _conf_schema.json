@@ -1,0 +1,26 @@
+{
+  "check_interval": {
+    "description": "监控检查间隔（秒）",
+    "type": "int",
+    "hint": "设置监控UP主直播状态的检查间隔，建议30-300秒",
+    "default": 60
+  },
+  "max_monitors": {
+    "description": "最大监控UP主数量",
+    "type": "int", 
+    "hint": "限制同时监控的UP主数量，避免API请求过于频繁",
+    "default": 50
+  },
+  "enable_notifications": {
+    "description": "是否启用开播通知",
+    "type": "bool",
+    "hint": "开启后会在UP主开播时发送通知消息",
+    "default": true
+  },
+  "enable_end_notifications": {
+    "description": "是否启用关播通知",
+    "type": "bool",
+    "hint": "开启后会在UP主结束直播时发送通知消息",
+    "default": true
+  }
+}
