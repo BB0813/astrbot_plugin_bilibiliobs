@@ -6,9 +6,9 @@
     "default": 60
   },
   "max_monitors": {
-    "description": "最大监控UP主数量",
-    "type": "int", 
-    "hint": "限制同时监控的UP主数量，避免API请求过于频繁",
+    "description": "最大监控UP主数量（每个会话）",
+    "type": "int",
+    "hint": "限制每个会话同时监控的UP主数量，避免API请求过于频繁",
     "default": 50
   },
   "enable_notifications": {
@@ -22,5 +22,23 @@
     "type": "bool",
     "hint": "开启后会在UP主结束直播时发送通知消息",
     "default": true
+  },
+  "bilibili_cookie": {
+    "description": "B站Cookie（可选）",
+    "type": "string",
+    "hint": "填入B站登录Cookie可获得更高的API请求限额，减少被限流的概率。留空则使用匿名请求。",
+    "default": ""
+  },
+  "live_notify_template": {
+    "description": "开播通知模板",
+    "type": "string",
+    "hint": "支持占位符: {uname} UP主名称, {title} 直播标题, {room_id} 直播间号。封面图会自动附带。",
+    "default": "🔴 {uname} 开播啦！\n📺 直播标题: {title}\n🔗 直播间: https://live.bilibili.com/{room_id}"
+  },
+  "end_notify_template": {
+    "description": "关播通知模板",
+    "type": "string",
+    "hint": "支持占位符: {uname} UP主名称, {title} 直播标题, {room_id} 直播间号。",
+    "default": "⚫ {uname} 已结束直播"
   }
 }
