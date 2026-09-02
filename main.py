@@ -280,6 +280,11 @@ class BiliLiveNoticePlugin(Star):
                 # 批量查询状态
                 now = asyncio.get_running_loop().time()
                 uids_to_check = [uid for uid in all_uids if self.uid_skip_until.get(uid, 0) <= now]
+                if not uids_to_check:
+                    # 修复：所有 uid 都在退避中，直接跳过本轮，避免向 B站 API 传空列表
+                    # 空列表会导致 API 返回 "invalid params" 并进一步加剧退避，形成死循环
+                    await asyncio.sleep(self.current_interval)
+                    continue
                 status_map = await self.get_live_status_batch(uids_to_check)
 
                 # 按会话逐个检测并发送通知
