@@ -18,7 +18,9 @@ class BiliLiveNoticePlugin(Star):
         self.enable_end_notifications = bool(self.config.get("enable_end_notifications", True)) if isinstance(self.config, dict) else True
         # 按会话隔离的订阅数据: {unified_msg_origin: {uid: {uname, room_id, added_by, added_time, at_all}}}
         self.monitored_uids: Dict[str, Dict[str, Dict]] = {}
-        self.live_status_cache: Dict[str, int] = {}
+        # 按会话隔离的直播状态缓存: {unified_msg_origin: {uid: live_status}}
+        # 修复：每个会话独立的缓存，避免同一UP主在多群订阅时只有第一个群能收到通知
+        self.live_status_cache: Dict[str, Dict[str, int]] = {}
         self.uid_error_counts: Dict[str, int] = {}
         self.uid_skip_until: Dict[str, float] = {}
         self.current_interval = self.check_interval
@@ -96,7 +98,24 @@ class BiliLiveNoticePlugin(Star):
                         logger.info(f"迁移完成，共 {sum(len(v) for v in self.monitored_uids.values())} 条订阅")
                     else:
                         self.monitored_uids = raw
-                    self.live_status_cache = data.get('live_status_cache', {})
+                    # 修复：live_status_cache 现在是按会话隔离的 {origin: {uid: status}}
+                    old_cache = data.get('live_status_cache', {})
+                    if old_cache and isinstance(old_cache, dict):
+                        # 检测是否是旧格式的全局缓存 {uid: status}
+                        first_val = next(iter(old_cache.values()), None)
+                        if first_val is not None and not isinstance(first_val, dict):
+                            # 旧格式迁移：把全局缓存的值继承到每个会话的缓存中
+                            # 这样正在直播的UP主不会被误判为"刚开播"，避免误发通知
+                            self.live_status_cache = {}
+                            for origin in self.monitored_uids:
+                                self.live_status_cache[origin] = dict(old_cache)
+                            logger.info("旧版全局缓存已迁移为按会话隔离，并继承旧状态避免误报开播")
+                            # 迁移后立即落盘新格式
+                            await self.save_config()
+                        else:
+                            self.live_status_cache = old_cache
+                    else:
+                        self.live_status_cache = {}
                     self.enable_notifications = data.get('enable_notifications', self.enable_notifications)
                     self.enable_end_notifications = data.get('enable_end_notifications', self.enable_end_notifications)
                     total = sum(len(uids) for uids in self.monitored_uids.values())
@@ -112,7 +131,20 @@ class BiliLiveNoticePlugin(Star):
                             self.monitored_uids = _migrate_old_format(raw)
                         else:
                             self.monitored_uids = raw
-                        self.live_status_cache = data.get('live_status_cache', {})
+                        # 修复：旧路径的 live_status_cache 也需按会话隔离处理
+                        old_cache = data.get('live_status_cache', {})
+                        if old_cache and isinstance(old_cache, dict):
+                            first_val = next(iter(old_cache.values()), None)
+                            if first_val is not None and not isinstance(first_val, dict):
+                                # 旧格式：继承到每个会话，避免误报开播
+                                self.live_status_cache = {}
+                                for origin in self.monitored_uids:
+                                    self.live_status_cache[origin] = dict(old_cache)
+                                logger.info("旧路径缓存已迁移为按会话隔离")
+                            else:
+                                self.live_status_cache = old_cache
+                        else:
+                            self.live_status_cache = {}
                         self.enable_notifications = data.get('enable_notifications', self.enable_notifications)
                         self.enable_end_notifications = data.get('enable_end_notifications', self.enable_end_notifications)
                     await self.save_config()
@@ -248,13 +280,23 @@ class BiliLiveNoticePlugin(Star):
                 # 批量查询状态
                 now = asyncio.get_running_loop().time()
                 uids_to_check = [uid for uid in all_uids if self.uid_skip_until.get(uid, 0) <= now]
+                if not uids_to_check:
+                    # 修复：所有 uid 都在退避中，直接跳过本轮，避免向 B站 API 传空列表
+                    # 空列表会导致 API 返回 "invalid params" 并进一步加剧退避，形成死循环
+                    await asyncio.sleep(self.current_interval)
+                    continue
                 status_map = await self.get_live_status_batch(uids_to_check)
 
                 # 按会话逐个检测并发送通知
                 for origin, origin_uids in dict(self.monitored_uids).items():
+                    # 确保每个会话都有独立的缓存
+                    if origin not in self.live_status_cache:
+                        self.live_status_cache[origin] = {}
+                    
                     for uid, monitor_info in dict(origin_uids).items():
                         current_status = status_map.get(uid, {"live_status": 0})
-                        previous_status = self.live_status_cache.get(uid, 0)
+                        # 修复：每个会话使用独立的缓存来判断状态变化
+                        previous_status = self.live_status_cache[origin].get(uid, 0)
 
                         # 检测到开播
                         if current_status.get("live_status") == 1 and previous_status != 1:
@@ -264,8 +306,8 @@ class BiliLiveNoticePlugin(Star):
                         if previous_status == 1 and current_status.get("live_status") != 1:
                             await self.send_end_notification(uid, current_status, origin, monitor_info)
 
-                        # 更新缓存
-                        self.live_status_cache[uid] = current_status.get("live_status", 0)
+                        # 更新当前会话的缓存
+                        self.live_status_cache[origin][uid] = current_status.get("live_status", 0)
 
                         # 错误统计与退避
                         is_empty = (not current_status.get("uname")) and current_status.get("room_id", 0) == 0
@@ -418,7 +460,10 @@ class BiliLiveNoticePlugin(Star):
                 "added_time": asyncio.get_running_loop().time(),
                 "at_all": at_all
             }
-            self.live_status_cache[uid] = status_info["live_status"]
+            # 修复：按会话隔离的缓存
+            if origin not in self.live_status_cache:
+                self.live_status_cache[origin] = {}
+            self.live_status_cache[origin][uid] = status_info["live_status"]
 
             await self.save_config()
 
@@ -473,7 +518,10 @@ class BiliLiveNoticePlugin(Star):
                     "added_time": asyncio.get_running_loop().time(),
                     "at_all": at_all
                 }
-                self.live_status_cache[uid] = status_info["live_status"]
+                # 修复：按会话隔离的缓存
+                if origin not in self.live_status_cache:
+                    self.live_status_cache[origin] = {}
+                self.live_status_cache[origin][uid] = status_info["live_status"]
                 added.append(f"{status_info.get('uname', '')}(UID:{uid})")
 
             await self.save_config()
