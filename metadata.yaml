@@ -3,6 +3,6 @@ desc: B站UP主开播监测插件，支持按会话独立订阅、封面图通�
 short_desc: B站UP主开播监测
 display_name: B站开播监测
 author: BB0813
-version: 1.1.0
+version: 1.2.0
 repo: https://github.com/BB0813/astrbot_plugin_bilibiliobs
 astrbot_version: ">=4.0.0"

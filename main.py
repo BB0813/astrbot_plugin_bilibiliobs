@@ -6,8 +6,9 @@ from typing import Dict, List, Optional
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
+from .bili_login import BilibiliLoginManager
 
-@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.1.0", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
+@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.2.0", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
 class BiliLiveNoticePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -31,6 +32,8 @@ class BiliLiveNoticePlugin(Star):
         self.session = None
         # 配置文件路径
         self.config_file = os.path.join(self._get_data_dir(), "monitor_config.json")
+        # 登录管理器
+        self.login_manager = BilibiliLoginManager(context, self._save_cookie_to_config)
         # 启动初始化任务
         asyncio.create_task(self.initialize())
 
@@ -180,6 +183,21 @@ class BiliLiveNoticePlugin(Star):
             headers["Cookie"] = cookie
         return headers
 
+    async def _save_cookie_to_config(self, cookie: str):
+        """保存Cookie到配置（登录管理器回调）"""
+        try:
+            if isinstance(self.config, dict):
+                self.config["bilibili_cookie"] = cookie
+                # 尝试保存到插件配置文件
+                config_path = os.path.join(self._get_data_dir(), "..", "..", "config", "plugins", "bili_live_notice.json")
+                os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.config, f, ensure_ascii=False, indent=2)
+                logger.info("Cookie已保存到插件配置")
+        except Exception as e:
+            logger.error(f"保存Cookie到配置失败: {e}")
+
+
     async def get_live_status(self, uid: str) -> Dict:
         """获取指定UID的直播状态"""
         try:
@@ -244,6 +262,11 @@ class BiliLiveNoticePlugin(Star):
                                     }
                     else:
                         logger.warning(f"B站API返回错误码: {body.get('code')}, 消息: {body.get('message', '未知错误')}")
+                        # 检测Cookie失效（-101错误）
+                        if body.get('code') == -101:
+                            cookie = self.config.get("bilibili_cookie", "") if isinstance(self.config, dict) else ""
+                            if cookie:
+                                asyncio.create_task(self.login_manager.check_and_notify_cookie_invalid(cookie, "B站API返回-101错误"))
                 elif response.status == 429:
                     self._last_rate_limited = True
                     logger.warning(f"B站API请求频率限制，状态码: {response.status}")
@@ -413,6 +436,14 @@ class BiliLiveNoticePlugin(Star):
     def _get_current_origin_monitors(self, origin: str) -> Dict[str, Dict]:
         """获取当前会话的订阅列表"""
         return self.monitored_uids.get(origin, {})
+
+    @filter.command("")
+    async def handle_all_messages(self, event: AstrMessageEvent):
+        """拦截所有消息，优先处理登录命令"""
+        # 尝试处理登录命令
+        if await self.login_manager.handle_admin_command(event):
+            return  # 命令已处理，不再继续
+        # 不是登录命令，继续传递给其他过滤器
 
     @filter.command("添加监控")
     async def add_monitor(self, event: AstrMessageEvent):
