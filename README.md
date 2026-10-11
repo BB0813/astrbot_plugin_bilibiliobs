@@ -140,7 +140,7 @@ bilibili登录
 
 ### Docker部署说明
 
-插件配置文件已自动保存到AstrBot数据目录（`data/plugins/bili_live_notice/`），确保AstrBot的 `data` 目录已正确挂载即可。
+插件配置与订阅数据已自动保存到AstrBot插件数据目录（`data/plugin_data/bili_live_notice/`），确保AstrBot的 `data` 目录已正确挂载即可。
 
 ### 如何获取UP主UID
 
@@ -161,11 +161,13 @@ bilibili登录
 
 从 v1.0.0 升级到 v1.1.0 时，旧版配置文件会自动迁移。迁移后每个群的订阅列表将独立，需要在各群重新添加订阅。
 
+从 v1.1.0 升级到 v1.2.2 时，订阅数据会自动从旧位置迁移到 `data/plugin_data/bili_live_notice/`，Cookie 也会改用 AstrBot 官方配置接口保存，无需手动操作。
+
 详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 版本信息
 
-- **版本**: 1.1.0
+- **版本**: 1.2.2
 - **作者**: BB0813
 - **仓库**: https://github.com/BB0813/astrbot_plugin_bilibiliobs
 
