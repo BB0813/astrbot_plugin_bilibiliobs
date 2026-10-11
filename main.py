@@ -50,19 +50,24 @@ class BiliLiveNoticePlugin(Star):
             return base
 
     def _iter_legacy_config_files(self) -> list:
-        """列出历史版本遗留的监控配置文件路径（新 -> 旧），仅返回实际存在的"""
+        """列出历史版本遗留的监控配置文件路径（新 -> 旧），仅返回实际存在的
+
+        注意：此方法**只读取**旧文件用于一次性迁移，插件本身不再向这些位置写入。
+        迁移完成后，配置统一保存到 data/plugin_data/bili_live_notice/。
+        """
         paths = []
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            # v1.1.0 - v1.2.0 曾把监控配置写进了插件代码目录下的 plugins/bili_live_notice/
+            # 只读探测：v1.1.0 - v1.2.0 曾把监控配置写进插件代码目录下，
+            # 这里读取它以迁移旧订阅，不在此处做任何写入
             paths.append(os.path.join(
                 get_astrbot_data_path(), "plugins", "bili_live_notice", "monitor_config.json"))
         except Exception:
             pass
-        # 数据目录不可用时的同名兜底位置
+        # 只读探测：数据目录不可用时的同名兜底位置
         paths.append(os.path.join(
             os.path.expanduser("~"), ".astrbot", "bili_live_notice", "monitor_config.json"))
-        # v1.0.0 写在插件代码目录里的配置
+        # 只读探测：v1.0.0 写在插件代码目录里的配置
         paths.append(os.path.join(os.path.dirname(__file__), "monitor_config.json"))
         return [p for p in paths if os.path.exists(p)]
 
