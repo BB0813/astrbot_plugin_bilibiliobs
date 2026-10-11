@@ -8,7 +8,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from .bili_login import BilibiliLoginManager
 
-@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.2.0", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
+@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.2.1", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
 class BiliLiveNoticePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -38,14 +38,33 @@ class BiliLiveNoticePlugin(Star):
         asyncio.create_task(self.initialize())
 
     def _get_data_dir(self) -> str:
-        """获取数据存储目录，优先使用 AstrBot 数据目录"""
+        """获取插件数据目录（规范路径：data/plugin_data/bili_live_notice）"""
+        try:
+            from astrbot.api.star import StarTools
+            return str(StarTools.get_data_dir("bili_live_notice"))
+        except Exception as e:
+            # 兜底路径，正常运行时不会走到这里
+            logger.warning(f"获取插件数据目录失败，回退到本地目录: {e}")
+            base = os.path.join(os.path.expanduser("~"), ".astrbot", "plugin_data", "bili_live_notice")
+            os.makedirs(base, exist_ok=True)
+            return base
+
+    def _iter_legacy_config_files(self) -> list:
+        """列出历史版本遗留的监控配置文件路径（新 -> 旧），仅返回实际存在的"""
+        paths = []
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            base = os.path.join(get_astrbot_data_path(), "plugins", "bili_live_notice")
+            # v1.1.0 - v1.2.0 曾把监控配置写进了插件代码目录下的 plugins/bili_live_notice/
+            paths.append(os.path.join(
+                get_astrbot_data_path(), "plugins", "bili_live_notice", "monitor_config.json"))
         except Exception:
-            base = os.path.join(os.path.expanduser("~"), ".astrbot", "bili_live_notice")
-        os.makedirs(base, exist_ok=True)
-        return base
+            pass
+        # 数据目录不可用时的同名兜底位置
+        paths.append(os.path.join(
+            os.path.expanduser("~"), ".astrbot", "bili_live_notice", "monitor_config.json"))
+        # v1.0.0 写在插件代码目录里的配置
+        paths.append(os.path.join(os.path.dirname(__file__), "monitor_config.json"))
+        return [p for p in paths if os.path.exists(p)]
 
     async def ensure_session(self):
         if not self.session or self.session.closed:
@@ -124,9 +143,10 @@ class BiliLiveNoticePlugin(Star):
                     total = sum(len(uids) for uids in self.monitored_uids.values())
                     logger.info(f"已加载 {total} 个监控配置")
             else:
-                # 兼容旧路径迁移
-                legacy_file = os.path.join(os.path.dirname(__file__), "monitor_config.json")
-                if os.path.exists(legacy_file):
+                # 数据目录变更（v1.2.1 起改为 data/plugin_data/），兼容旧路径迁移
+                legacy_file = next(iter(self._iter_legacy_config_files()), None)
+                if legacy_file:
+                    logger.info(f"检测到旧路径配置文件，正在迁移: {legacy_file}")
                     with open(legacy_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         raw = data.get('monitored_uids', {})
@@ -151,7 +171,8 @@ class BiliLiveNoticePlugin(Star):
                         self.enable_notifications = data.get('enable_notifications', self.enable_notifications)
                         self.enable_end_notifications = data.get('enable_end_notifications', self.enable_end_notifications)
                     await self.save_config()
-                    logger.info("已从旧路径迁移配置")
+                    total = sum(len(uids) for uids in self.monitored_uids.values())
+                    logger.info(f"已迁移 {total} 个监控配置到 {self.config_file}（原文件可自行删除）")
                 else:
                     logger.info("配置文件不存在，使用默认配置")
         except Exception as e:
@@ -184,16 +205,25 @@ class BiliLiveNoticePlugin(Star):
         return headers
 
     async def _save_cookie_to_config(self, cookie: str):
-        """保存Cookie到配置（登录管理器回调）"""
+        """保存Cookie到配置（登录管理器回调）
+
+        走 AstrBot 的正规配置接口持久化，不再自行拼路径写入 data/config 目录。
+        """
         try:
             if isinstance(self.config, dict):
                 self.config["bilibili_cookie"] = cookie
-                # 尝试保存到插件配置文件
-                config_path = os.path.join(self._get_data_dir(), "..", "..", "config", "plugins", "bili_live_notice.json")
-                os.makedirs(os.path.dirname(config_path), exist_ok=True)
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    json.dump(self.config, f, ensure_ascii=False, indent=2)
-                logger.info("Cookie已保存到插件配置")
+
+            save_async = getattr(self.config, "save_config_async", None)
+            if callable(save_async):
+                await save_async()
+            else:
+                save_sync = getattr(self.config, "save_config", None)
+                if callable(save_sync):
+                    save_sync()
+                else:
+                    logger.warning("当前配置对象不支持持久化，Cookie 仅在本次运行内生效")
+                    return
+            logger.info("Cookie已保存到插件配置")
         except Exception as e:
             logger.error(f"保存Cookie到配置失败: {e}")
 
@@ -202,7 +232,7 @@ class BiliLiveNoticePlugin(Star):
         """获取指定UID的直播状态"""
         try:
             batch = await self.get_live_status_batch([uid])
-            if uid in batch:
+            if batch and uid in batch:
                 return batch[uid]
         except asyncio.TimeoutError:
             logger.error(f"获取UID {uid} 直播状态超时")
@@ -217,9 +247,15 @@ class BiliLiveNoticePlugin(Star):
 
         return {"live_status": 0, "room_id": 0, "title": "", "uname": "", "cover": ""}
 
-    async def get_live_status_batch(self, uids: list[str]) -> Dict[str, Dict]:
-        """批量获取多个UID的直播状态，返回以字符串UID为键的字典"""
+    async def get_live_status_batch(self, uids: list[str]) -> Optional[Dict[str, Dict]]:
+        """批量获取多个UID的直播状态，返回以字符串UID为键的字典
+
+        返回 None 表示本次请求整体失败（网络异常 / 非200状态码 / 业务错误码），
+        调用方必须据此跳过通知与缓存更新，绝不能把"取不到数据"当成"全部未开播"。
+        返回字典时只包含 B站真正返回了数据的 uid，缺失的 uid 由调用方按需处理。
+        """
         result_map: Dict[str, Dict] = {}
+        succeeded = False
         try:
             await self.ensure_session()
             url = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids"
@@ -230,6 +266,7 @@ class BiliLiveNoticePlugin(Star):
                 if response.status == 200:
                     body = await response.json()
                     if body.get("code") == 0:
+                        succeeded = True
                         self._last_rate_limited = False
                         data_obj = body.get("data", {})
                         if isinstance(data_obj, dict):
@@ -274,11 +311,9 @@ class BiliLiveNoticePlugin(Star):
                     logger.warning(f"B站API请求失败，状态码: {response.status}")
         except Exception as e:
             logger.error(f"批量获取直播状态失败: {e}")
-        finally:
-            for u in uids:
-                if str(u) not in result_map:
-                    result_map[str(u)] = {"live_status": 0, "room_id": 0, "title": "", "uname": "", "cover": ""}
-        return result_map
+
+        # 失败时返回 None，让调用方跳过本轮，而不是收到一批伪造的 live_status=0
+        return result_map if succeeded else None
 
     async def monitor_live_status(self):
         """监控直播状态的后台任务"""
@@ -309,15 +344,45 @@ class BiliLiveNoticePlugin(Star):
                     await asyncio.sleep(self.current_interval)
                     continue
                 status_map = await self.get_live_status_batch(uids_to_check)
+                if status_map is None:
+                    # 获取失败：本轮既不发送通知，也不更新直播状态缓存
+                    # 否则接口抖动会被误判成"全部下播"（假下播刷屏），
+                    # 缓存被刷成0后，接口恢复时在播主播又会被当成"刚开播"重推一遍
+                    consecutive_errors += 1
+                    logger.warning(f"批量获取直播状态失败，本轮跳过通知与缓存更新（连续第{consecutive_errors}次）")
+                    if self._last_rate_limited:
+                        self.current_interval = min(300, max(self.check_interval, int(self.current_interval * 2)))
+                    await asyncio.sleep(self.current_interval)
+                    continue
+
+                queried_uids = set(uids_to_check)
 
                 # 按会话逐个检测并发送通知
                 for origin, origin_uids in dict(self.monitored_uids).items():
                     # 确保每个会话都有独立的缓存
                     if origin not in self.live_status_cache:
                         self.live_status_cache[origin] = {}
-                    
+
                     for uid, monitor_info in dict(origin_uids).items():
-                        current_status = status_map.get(uid, {"live_status": 0})
+                        # 本轮未查询（处于退避中）的 uid：没有新数据，保持缓存原值
+                        # 不能当成"未开播"，否则退避中的 uid 会被反复误报下播并钉死在退避里
+                        if uid not in queried_uids:
+                            continue
+
+                        current_status = status_map.get(uid)
+                        # B站未返回该 uid 数据，或返回的是空记录：只累计退避
+                        # 不改缓存、不发通知，避免把"取不到数据"误判成"已下播"
+                        if current_status is None or (
+                            not current_status.get("uname") and current_status.get("room_id", 0) == 0
+                        ):
+                            cnt = self.uid_error_counts.get(uid, 0) + 1
+                            self.uid_error_counts[uid] = cnt
+                            self.uid_skip_until[uid] = now + min(300, 30 * cnt)
+                            continue
+
+                        self.uid_error_counts.pop(uid, None)
+                        self.uid_skip_until.pop(uid, None)
+
                         # 修复：每个会话使用独立的缓存来判断状态变化
                         previous_status = self.live_status_cache[origin].get(uid, 0)
 
@@ -331,16 +396,6 @@ class BiliLiveNoticePlugin(Star):
 
                         # 更新当前会话的缓存
                         self.live_status_cache[origin][uid] = current_status.get("live_status", 0)
-
-                        # 错误统计与退避
-                        is_empty = (not current_status.get("uname")) and current_status.get("room_id", 0) == 0
-                        if is_empty:
-                            cnt = self.uid_error_counts.get(uid, 0) + 1
-                            self.uid_error_counts[uid] = cnt
-                            self.uid_skip_until[uid] = now + min(300, 30 * cnt)
-                        else:
-                            self.uid_error_counts.pop(uid, None)
-                            self.uid_skip_until.pop(uid, None)
 
                 # 重置错误计数器
                 consecutive_errors = 0
