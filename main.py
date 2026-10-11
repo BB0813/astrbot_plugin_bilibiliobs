@@ -8,7 +8,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from .bili_login import BilibiliLoginManager
 
-@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.2.1", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
+@register("bili_live_notice", "Binbim", "B站UP主开播监测插件", "1.2.2", "https://github.com/BB0813/astrbot_plugin_bilibiliobs")
 class BiliLiveNoticePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -58,7 +58,7 @@ class BiliLiveNoticePlugin(Star):
         paths = []
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            # 只读探测：v1.1.0 - v1.2.0 曾把监控配置写进插件代码目录下，
+            # 只读探测：v1.2.1 及更早版本曾把监控配置写进插件代码目录下，
             # 这里读取它以迁移旧订阅，不在此处做任何写入
             paths.append(os.path.join(
                 get_astrbot_data_path(), "plugins", "bili_live_notice", "monitor_config.json"))
@@ -148,7 +148,7 @@ class BiliLiveNoticePlugin(Star):
                     total = sum(len(uids) for uids in self.monitored_uids.values())
                     logger.info(f"已加载 {total} 个监控配置")
             else:
-                # 数据目录变更（v1.2.1 起改为 data/plugin_data/），兼容旧路径迁移
+                # 数据目录变更（v1.2.2 起改为 data/plugin_data/），兼容旧路径迁移
                 legacy_file = next(iter(self._iter_legacy_config_files()), None)
                 if legacy_file:
                     logger.info(f"检测到旧路径配置文件，正在迁移: {legacy_file}")
